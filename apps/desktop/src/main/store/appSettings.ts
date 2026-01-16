@@ -1,5 +1,5 @@
 import Store from 'electron-store';
-import type { SelectedModel, OllamaConfig } from '@accomplish/shared';
+import type { SelectedModel, OllamaConfig, BedrockConfig } from '@accomplish/shared';
 
 /**
  * App settings schema
@@ -13,6 +13,8 @@ interface AppSettingsSchema {
   selectedModel: SelectedModel | null;
   /** Ollama server configuration */
   ollamaConfig: OllamaConfig | null;
+  /** Amazon Bedrock configuration */
+  bedrockConfig: BedrockConfig | null;
 }
 
 const appSettingsStore = new Store<AppSettingsSchema>({
@@ -25,6 +27,7 @@ const appSettingsStore = new Store<AppSettingsSchema>({
       model: 'anthropic/claude-opus-4-5',
     },
     ollamaConfig: null,
+    bedrockConfig: null,
   },
 });
 
@@ -85,6 +88,20 @@ export function setOllamaConfig(config: OllamaConfig | null): void {
 }
 
 /**
+ * Get Bedrock configuration
+ */
+export function getBedrockConfig(): BedrockConfig | null {
+  return appSettingsStore.get('bedrockConfig');
+}
+
+/**
+ * Set Bedrock configuration
+ */
+export function setBedrockConfig(config: BedrockConfig | null): void {
+  appSettingsStore.set('bedrockConfig', config);
+}
+
+/**
  * Get all app settings
  */
 export function getAppSettings(): AppSettingsSchema {
@@ -93,6 +110,7 @@ export function getAppSettings(): AppSettingsSchema {
     onboardingComplete: appSettingsStore.get('onboardingComplete'),
     selectedModel: appSettingsStore.get('selectedModel'),
     ollamaConfig: appSettingsStore.get('ollamaConfig'),
+    bedrockConfig: appSettingsStore.get('bedrockConfig'),
   };
 }
 

@@ -2,7 +2,7 @@
  * Provider and model configuration types for multi-provider support
  */
 
-export type ProviderType = 'anthropic' | 'openai' | 'google' | 'xai' | 'ollama' | 'custom';
+export type ProviderType = 'anthropic' | 'openai' | 'google' | 'xai' | 'bedrock' | 'ollama' | 'custom';
 
 export interface ProviderConfig {
   id: ProviderType;
@@ -46,6 +46,36 @@ export interface OllamaConfig {
   enabled: boolean;
   lastValidated?: number;
   models?: OllamaModelInfo[];  // Discovered models from Ollama API
+}
+
+/**
+ * Bedrock configuration (uses AWS credential chain)
+ */
+export interface BedrockConfig {
+  region: string;
+  enabled: boolean;
+  lastValidated?: number;
+  /** Optional: AWS profile name from ~/.aws/credentials */
+  profile?: string;
+}
+
+/**
+ * Bedrock credentials stored as JSON string via storeApiKey('bedrock', JSON.stringify(creds))
+ */
+export type BedrockCredentials = BedrockCredentialsManual | BedrockCredentialsProfile;
+
+export interface BedrockCredentialsManual {
+  mode: 'credentials';
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;  // Optional: for temporary credentials
+  region: string;
+}
+
+export interface BedrockCredentialsProfile {
+  mode: 'profile';
+  profile: string;  // AWS profile name from ~/.aws/credentials
+  region: string;
 }
 
 /**
@@ -146,6 +176,37 @@ export const DEFAULT_PROVIDERS: ProviderConfig[] = [
         fullId: 'xai/grok-3',
         contextWindow: 131000,
         supportsVision: false,
+      },
+    ],
+  },
+  {
+    id: 'bedrock',
+    name: 'Amazon Bedrock',
+    requiresApiKey: false, // Uses AWS credentials
+    models: [
+      {
+        id: 'anthropic.claude-opus-4-5-20251101-v1:0',
+        displayName: 'Claude Opus 4.5',
+        provider: 'bedrock',
+        fullId: 'amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0',
+        contextWindow: 200000,
+        supportsVision: true,
+      },
+      {
+        id: 'anthropic.claude-sonnet-4-5-20250929-v1:0',
+        displayName: 'Claude Sonnet 4.5',
+        provider: 'bedrock',
+        fullId: 'amazon-bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0',
+        contextWindow: 200000,
+        supportsVision: true,
+      },
+      {
+        id: 'anthropic.claude-haiku-4-5-20251001-v1:0',
+        displayName: 'Claude Haiku 4.5',
+        provider: 'bedrock',
+        fullId: 'amazon-bedrock/anthropic.claude-haiku-4-5-20251001-v1:0',
+        contextWindow: 200000,
+        supportsVision: true,
       },
     ],
   },

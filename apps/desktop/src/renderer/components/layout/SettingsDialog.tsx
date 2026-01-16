@@ -26,13 +26,46 @@ const API_KEY_PROVIDERS = [
   { id: 'openai', name: 'OpenAI', prefix: 'sk-', placeholder: 'sk-...' },
   { id: 'google', name: 'Google AI', prefix: 'AIza', placeholder: 'AIza...' },
   { id: 'xai', name: 'xAI (Grok)', prefix: 'xai-', placeholder: 'xai-...' },
+  { id: 'bedrock', name: 'Amazon Bedrock', prefix: '', placeholder: '' },
+] as const;
+
+// Bedrock-supported regions (https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-regions.html)
+const BEDROCK_REGIONS = [
+  'us-east-1',
+  'us-east-2',
+  'us-west-2',
+  'ap-south-1',
+  'ap-southeast-1',
+  'ap-southeast-2',
+  'ap-northeast-1',
+  'eu-central-1',
+  'eu-west-1',
+  'eu-west-3',
+  'sa-east-1',
 ] as const;
 
 type ProviderId = typeof API_KEY_PROVIDERS[number]['id'];
 
+interface BedrockModel {
+  id: string;
+  displayName: string;
+  provider: string;
+}
+
 export default function SettingsDialog({ open, onOpenChange, onApiKeySaved }: SettingsDialogProps) {
   const [apiKey, setApiKey] = useState('');
   const [provider, setProvider] = useState<ProviderId>('anthropic');
+  
+  // Bedrock-specific state
+  const [bedrockMode, setBedrockMode] = useState<'credentials' | 'profile'>('credentials');
+  const [awsAccessKeyId, setAwsAccessKeyId] = useState('');
+  const [awsSecretAccessKey, setAwsSecretAccessKey] = useState('');
+  const [awsRegion, setAwsRegion] = useState('us-east-1');
+  const [awsProfile, setAwsProfile] = useState('default');
+  const [bedrockModels, setBedrockModels] = useState<BedrockModel[]>([]);
+  const [bedrockConnected, setBedrockConnected] = useState(false);
+  const [bedrockError, setBedrockError] = useState<string | null>(null);
+  const [testingBedrock, setTestingBedrock] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -163,43 +196,82 @@ export default function SettingsDialog({ open, onOpenChange, onApiKeySaved }: Se
 
   const handleSaveApiKey = async () => {
     const accomplish = getAccomplish();
-    const trimmedKey = apiKey.trim();
     const currentProvider = API_KEY_PROVIDERS.find((p) => p.id === provider)!;
-
-    if (!trimmedKey) {
-      setError('Please enter an API key.');
-      return;
-    }
-
-    if (!trimmedKey.startsWith(currentProvider.prefix)) {
-      setError(`Invalid API key format. Key should start with ${currentProvider.prefix}`);
-      return;
-    }
 
     setIsSaving(true);
     setError(null);
     setStatusMessage(null);
 
     try {
-      // Validate first
-      const validation = await accomplish.validateApiKeyForProvider(provider, trimmedKey);
-      if (!validation.valid) {
-        setError(validation.error || 'Invalid API key');
-        setIsSaving(false);
-        return;
+      let keyToSave: string;
+      
+      if (provider === 'bedrock') {
+        // Build Bedrock credentials JSON
+        if (bedrockMode === 'credentials') {
+          if (!awsAccessKeyId.trim() || !awsSecretAccessKey.trim()) {
+            setError('Please enter both Access Key ID and Secret Access Key.');
+            setIsSaving(false);
+            return;
+          }
+          keyToSave = JSON.stringify({
+            mode: 'credentials',
+            accessKeyId: awsAccessKeyId.trim(),
+            secretAccessKey: awsSecretAccessKey.trim(),
+            region: awsRegion,
+          });
+        } else {
+          if (!awsProfile.trim()) {
+            setError('Please enter an AWS profile name.');
+            setIsSaving(false);
+            return;
+          }
+          keyToSave = JSON.stringify({
+            mode: 'profile',
+            profile: awsProfile.trim(),
+            region: awsRegion,
+          });
+        }
+      } else {
+        // Standard API key flow
+        const trimmedKey = apiKey.trim();
+        if (!trimmedKey) {
+          setError('Please enter an API key.');
+          setIsSaving(false);
+          return;
+        }
+        if (currentProvider.prefix && !trimmedKey.startsWith(currentProvider.prefix)) {
+          setError(`Invalid API key format. Key should start with ${currentProvider.prefix}`);
+          setIsSaving(false);
+          return;
+        }
+        keyToSave = trimmedKey;
+
+        // Validate API key (skip for Bedrock - validated on first use)
+        const validation = await accomplish.validateApiKeyForProvider(provider, keyToSave);
+        if (!validation.valid) {
+          setError(validation.error || 'Invalid API key');
+          setIsSaving(false);
+          return;
+        }
       }
 
-      const savedKey = await accomplish.addApiKey(provider, trimmedKey);
+      const savedKey = await accomplish.addApiKey(provider, keyToSave);
       analytics.trackSaveApiKey(currentProvider.name);
+      
+      // Clear inputs
       setApiKey('');
-      setStatusMessage(`${currentProvider.name} API key saved securely.`);
+      setAwsAccessKeyId('');
+      setAwsSecretAccessKey('');
+      
+      const savedType = provider === 'bedrock' ? 'credentials' : 'API key';
+      setStatusMessage(`${currentProvider.name} ${savedType} saved securely.`);
       setSavedKeys((prev) => {
         const filtered = prev.filter((k) => k.provider !== savedKey.provider);
         return [...filtered, savedKey];
       });
       onApiKeySaved?.();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to save API key.';
+      const message = err instanceof Error ? err.message : 'Failed to save.';
       setError(message);
     } finally {
       setIsSaving(false);
@@ -334,17 +406,17 @@ export default function SettingsDialog({ open, onOpenChange, onApiKeySaved }: Se
                       className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                     >
                       <option value="" disabled>Select a model...</option>
-                      {DEFAULT_PROVIDERS.filter((p) => p.requiresApiKey).map((provider) => {
-                        const hasApiKey = savedKeys.some((k) => k.provider === provider.id);
+                      {DEFAULT_PROVIDERS.filter((p) => p.requiresApiKey || p.id === 'bedrock').map((provider) => {
+                        const hasCredentials = savedKeys.some((k) => k.provider === provider.id);
                         return (
                           <optgroup key={provider.id} label={provider.name}>
                             {provider.models.map((model) => (
                               <option
                                 key={model.fullId}
                                 value={model.fullId}
-                                disabled={!hasApiKey}
+                                disabled={!hasCredentials}
                               >
-                                {model.displayName}{!hasApiKey ? ' (No API key)' : ''}
+                                {model.displayName}{!hasCredentials ? ' (No credentials)' : ''}
                               </option>
                             ))}
                           </optgroup>
@@ -357,7 +429,7 @@ export default function SettingsDialog({ open, onOpenChange, onApiKeySaved }: Se
                   )}
                   {selectedModel && selectedModel.provider !== 'ollama' && !savedKeys.some((k) => k.provider === selectedModel.provider) && (
                     <p className="mt-3 text-sm text-warning">
-                      No API key configured for {DEFAULT_PROVIDERS.find((p) => p.id === selectedModel.provider)?.name}. Add one below.
+                      No credentials configured for {DEFAULT_PROVIDERS.find((p) => p.id === selectedModel.provider)?.name}. Add them below.
                     </p>
                   )}
                 </>
@@ -495,6 +567,12 @@ export default function SettingsDialog({ open, onOpenChange, onApiKeySaved }: Se
                       onClick={() => {
                         analytics.trackSelectProvider(p.name);
                         setProvider(p.id);
+                        // Clear errors when switching providers
+                        setError(null);
+                        setStatusMessage(null);
+                        setBedrockError(null);
+                        setBedrockConnected(false);
+                        setBedrockModels([]);
                       }}
                       className={`rounded-xl border p-4 text-center transition-all duration-200 ease-accomplish ${
                         provider === p.id
@@ -508,20 +586,159 @@ export default function SettingsDialog({ open, onOpenChange, onApiKeySaved }: Se
                 </div>
               </div>
 
-              {/* API Key Input */}
-              <div className="mb-5">
-                <label className="mb-2.5 block text-sm font-medium text-foreground">
-                  {API_KEY_PROVIDERS.find((p) => p.id === provider)?.name} API Key
-                </label>
-                <input
-                  data-testid="settings-api-key-input"
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={API_KEY_PROVIDERS.find((p) => p.id === provider)?.placeholder}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                />
-              </div>
+              {/* Credentials Input - Different UI for Bedrock vs others */}
+              {provider === 'bedrock' ? (
+                <div className="mb-5 space-y-4">
+                  {/* Mode Toggle */}
+                  <div>
+                    <label className="mb-2.5 block text-sm font-medium text-foreground">
+                      Authentication Method
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setBedrockMode('credentials')}
+                        className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                          bedrockMode === 'credentials'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-muted text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        Access Keys
+                      </button>
+                      <button
+                        onClick={() => setBedrockMode('profile')}
+                        className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                          bedrockMode === 'profile'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-muted text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        AWS Profile
+                      </button>
+                    </div>
+                  </div>
+
+                  {bedrockMode === 'credentials' ? (
+                    <>
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-foreground">
+                          Access Key ID
+                        </label>
+                        <input
+                          type="text"
+                          value={awsAccessKeyId}
+                          onChange={(e) => setAwsAccessKeyId(e.target.value)}
+                          placeholder="AKIA..."
+                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-foreground">
+                          Secret Access Key
+                        </label>
+                        <input
+                          type="password"
+                          value={awsSecretAccessKey}
+                          onChange={(e) => setAwsSecretAccessKey(e.target.value)}
+                          placeholder="wJalr..."
+                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <div>
+                      <label className="mb-2 block text-sm font-medium text-foreground">
+                        Profile Name
+                      </label>
+                      <input
+                        type="text"
+                        value={awsProfile}
+                        onChange={(e) => setAwsProfile(e.target.value)}
+                        placeholder="default"
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      />
+                      <p className="mt-1.5 text-xs text-muted-foreground">
+                        Profile from ~/.aws/credentials
+                      </p>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-foreground">
+                      Region
+                    </label>
+                    <select
+                      value={awsRegion}
+                      onChange={(e) => {
+                        setAwsRegion(e.target.value);
+                        setBedrockConnected(false);
+                        setBedrockModels([]);
+                      }}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    >
+                      {BEDROCK_REGIONS.map((region) => (
+                        <option key={region} value={region}>{region}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setTestingBedrock(true);
+                      setBedrockError(null);
+                      try {
+                        const creds = bedrockMode === 'credentials'
+                          ? { mode: 'credentials' as const, accessKeyId: awsAccessKeyId, secretAccessKey: awsSecretAccessKey }
+                          : { mode: 'profile' as const, profile: awsProfile };
+                        const result = await getAccomplish().testBedrockConnection(JSON.stringify(creds), awsRegion);
+                        if (result.success && result.models) {
+                          setBedrockModels(result.models);
+                          setBedrockConnected(true);
+                        } else {
+                          setBedrockError(result.error || 'Connection failed');
+                          setBedrockConnected(false);
+                        }
+                      } catch (err) {
+                        setBedrockError(err instanceof Error ? err.message : 'Connection failed');
+                        setBedrockConnected(false);
+                      } finally {
+                        setTestingBedrock(false);
+                      }
+                    }}
+                    disabled={testingBedrock || (bedrockMode === 'credentials' && (!awsAccessKeyId || !awsSecretAccessKey))}
+                    className="w-full rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+                  >
+                    {testingBedrock ? 'Testing...' : 'Test Connection & Load Models'}
+                  </button>
+
+                  {bedrockError && (
+                    <p className="text-sm text-destructive">{bedrockError}</p>
+                  )}
+
+                  {bedrockConnected && bedrockModels.length > 0 && (
+                    <div className="rounded-md border border-green-500/30 bg-green-500/10 p-3">
+                      <p className="text-sm text-green-600 dark:text-green-400">
+                        ✓ Connected! Found {bedrockModels.length} models
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="mb-5">
+                  <label className="mb-2.5 block text-sm font-medium text-foreground">
+                    {API_KEY_PROVIDERS.find((p) => p.id === provider)?.name} API Key
+                  </label>
+                  <input
+                    data-testid="settings-api-key-input"
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder={API_KEY_PROVIDERS.find((p) => p.id === provider)?.placeholder}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  />
+                </div>
+              )}
 
               {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
               {statusMessage && (
@@ -533,7 +750,7 @@ export default function SettingsDialog({ open, onOpenChange, onApiKeySaved }: Se
                 onClick={handleSaveApiKey}
                 disabled={isSaving}
               >
-                {isSaving ? 'Saving...' : 'Save API Key'}
+                {isSaving ? 'Saving...' : provider === 'bedrock' ? 'Save Credentials' : 'Save API Key'}
               </button>
 
               {/* Saved Keys */}
@@ -544,7 +761,7 @@ export default function SettingsDialog({ open, onOpenChange, onApiKeySaved }: Se
                 </div>
               ) : savedKeys.length > 0 && (
                 <div className="mt-6">
-                  <h3 className="mb-3 text-sm font-medium text-foreground">Saved Keys</h3>
+                  <h3 className="mb-3 text-sm font-medium text-foreground">Saved Credentials</h3>
                   <div className="space-y-2">
                     {savedKeys.map((key) => {
                       const providerConfig = API_KEY_PROVIDERS.find((p) => p.id === key.provider);

@@ -6,6 +6,9 @@
  */
 
 import { getApiKey, type ApiKeyProvider } from '../store/secureStorage';
+import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
+import { fromIni } from '@aws-sdk/credential-providers';
+import type { BedrockCredentials } from '@accomplish/shared';
 
 const SUMMARY_PROMPT = `Generate a very short title (3-5 words max) that summarizes this task request.
 The title should be in sentence case, no quotes, no punctuation at end.
@@ -19,8 +22,7 @@ Task: `;
  * @returns A short summary string, or truncated prompt as fallback
  */
 export async function generateTaskSummary(prompt: string): Promise<string> {
-  // Try providers in order of preference
-  const providers: ApiKeyProvider[] = ['anthropic', 'openai', 'google', 'xai'];
+  const providers: ApiKeyProvider[] = ['anthropic', 'openai', 'google', 'xai', 'bedrock'];
 
   for (const provider of providers) {
     const apiKey = getApiKey(provider);
@@ -57,6 +59,8 @@ async function callProvider(
       return callGoogle(apiKey, prompt);
     case 'xai':
       return callXAI(apiKey, prompt);
+    case 'bedrock':
+      return callBedrock(apiKey, prompt);
     default:
       return null;
   }
@@ -182,6 +186,44 @@ async function callXAI(apiKey: string, prompt: string): Promise<string> {
     choices: Array<{ message: { content: string } }>;
   };
   const text = data.choices?.[0]?.message?.content;
+  return cleanSummary(text || '');
+}
+
+async function callBedrock(credentialsJson: string, prompt: string): Promise<string> {
+  const creds: BedrockCredentials = JSON.parse(credentialsJson);
+  
+  const clientConfig: ConstructorParameters<typeof BedrockRuntimeClient>[0] = {
+    region: creds.region,
+  };
+
+  if (creds.mode === 'credentials') {
+    clientConfig.credentials = {
+      accessKeyId: creds.accessKeyId,
+      secretAccessKey: creds.secretAccessKey,
+      sessionToken: creds.sessionToken,
+    };
+  } else if (creds.mode === 'profile') {
+    clientConfig.credentials = fromIni({ profile: creds.profile });
+  }
+
+  const client = new BedrockRuntimeClient(clientConfig);
+
+  const response = await client.send(
+    new ConverseCommand({
+      modelId: 'amazon.nova-lite-v1:0',
+      messages: [
+        {
+          role: 'user',
+          content: [{ text: SUMMARY_PROMPT + prompt }],
+        },
+      ],
+      inferenceConfig: {
+        maxTokens: 50,
+      },
+    })
+  );
+
+  const text = response.output?.message?.content?.[0]?.text;
   return cleanSummary(text || '');
 }
 

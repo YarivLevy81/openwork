@@ -57,6 +57,7 @@ import type {
   TaskStatus,
   SelectedModel,
   OllamaConfig,
+  BedrockCredentials,
 } from '@accomplish/shared';
 import { DEFAULT_PROVIDERS } from '@accomplish/shared';
 import {
@@ -74,7 +75,7 @@ import {
 } from '../test-utils/mock-task-flow';
 
 const MAX_TEXT_LENGTH = 8000;
-const ALLOWED_API_KEY_PROVIDERS = new Set(['anthropic', 'openai', 'google', 'xai', 'custom']);
+const ALLOWED_API_KEY_PROVIDERS = new Set(['anthropic', 'openai', 'google', 'xai', 'bedrock', 'custom']);
 const API_KEY_VALIDATION_TIMEOUT_MS = 15000;
 
 interface OllamaModel {
@@ -684,7 +685,9 @@ export function registerIPCHandlers(): void {
       if (!ALLOWED_API_KEY_PROVIDERS.has(provider)) {
         throw new Error('Unsupported API key provider');
       }
-      const sanitizedKey = sanitizeString(key, 'apiKey', 256);
+      // Bedrock credentials are JSON, need more space
+      const maxKeyLength = provider === 'bedrock' ? 1024 : 256;
+      const sanitizedKey = sanitizeString(key, 'apiKey', maxKeyLength);
       const sanitizedLabel = label ? sanitizeString(label, 'label', 128) : undefined;
 
       // Store the API key securely in OS keychain
@@ -995,6 +998,36 @@ export function registerIPCHandlers(): void {
     }
     setOllamaConfig(config);
     console.log('[Ollama] Config saved:', config);
+  });
+
+  // Bedrock: Test connection by verifying credentials work
+  handle('bedrock:test-connection', async (_event: IpcMainInvokeEvent, credentialsJson: string, region: string) => {
+    try {
+      const { BedrockClient, ListFoundationModelsCommand } = await import('@aws-sdk/client-bedrock');
+      const { fromIni } = await import('@aws-sdk/credential-providers');
+      
+      const creds = JSON.parse(credentialsJson) as BedrockCredentials;
+      const clientConfig: ConstructorParameters<typeof BedrockClient>[0] = { region };
+
+      if (creds.mode === 'credentials') {
+        clientConfig.credentials = {
+          accessKeyId: creds.accessKeyId,
+          secretAccessKey: creds.secretAccessKey,
+        };
+      } else {
+        clientConfig.credentials = fromIni({ profile: creds.profile });
+      }
+
+      const client = new BedrockClient(clientConfig);
+      await client.send(new ListFoundationModelsCommand({ byOutputModality: 'TEXT' }));
+
+      console.log('[Bedrock] Connection successful');
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Connection failed';
+      console.warn('[Bedrock] Connection failed:', message);
+      return { success: false, error: `Cannot connect to Bedrock: ${message}` };
+    }
   });
 
   // API Keys: Get all API keys (with masked values)

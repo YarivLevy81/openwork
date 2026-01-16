@@ -13,6 +13,7 @@ import { getSelectedModel } from '../store/appSettings';
 import { generateOpenCodeConfig, ACCOMPLISH_AGENT_NAME } from './config-generator';
 import { getExtendedNodePath } from '../utils/system-path';
 import { getBundledNodePaths, logBundledNodeInfo } from '../utils/bundled-node';
+import type { BedrockCredentials } from '@accomplish/shared';
 import path from 'path';
 import type {
   TaskConfig,
@@ -385,11 +386,25 @@ export class OpenCodeAdapter extends EventEmitter<OpenCodeAdapterEvents> {
       console.log('[OpenCode CLI] Using Ollama host:', selectedModel.baseUrl);
     }
 
-    // Log config environment variable
-    console.log('[OpenCode CLI] OPENCODE_CONFIG in env:', process.env.OPENCODE_CONFIG);
-    if (process.env.OPENCODE_CONFIG) {
-      env.OPENCODE_CONFIG = process.env.OPENCODE_CONFIG;
-      console.log('[OpenCode CLI] Passing OPENCODE_CONFIG to subprocess:', env.OPENCODE_CONFIG);
+    // Set Bedrock credentials if configured
+    if (apiKeys.bedrock) {
+      try {
+        const creds = JSON.parse(apiKeys.bedrock) as BedrockCredentials;
+        if (creds.mode === 'credentials') {
+          env.AWS_ACCESS_KEY_ID = creds.accessKeyId;
+          env.AWS_SECRET_ACCESS_KEY = creds.secretAccessKey;
+          if (creds.sessionToken) {
+            env.AWS_SESSION_TOKEN = creds.sessionToken;
+          }
+          console.log('[OpenCode CLI] Using Bedrock credentials from settings');
+        } else if (creds.mode === 'profile') {
+          env.AWS_PROFILE = creds.profile;
+          console.log('[OpenCode CLI] Using AWS profile:', creds.profile);
+        }
+        env.AWS_REGION = creds.region;
+      } catch (e) {
+        console.warn('[OpenCode CLI] Failed to parse Bedrock credentials:', e);
+      }
     }
 
     // Pass task ID to environment for task-scoped page naming in parallel execution
