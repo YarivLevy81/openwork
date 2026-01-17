@@ -8,7 +8,7 @@ import {
   isOpenCodeBundled,
   getBundledOpenCodeVersion,
 } from './cli-path';
-import { getAllApiKeys } from '../store/secureStorage';
+import { getAllApiKeys, getBedrockCredentials } from '../store/secureStorage';
 import { getSelectedModel } from '../store/appSettings';
 import { generateOpenCodeConfig, ACCOMPLISH_AGENT_NAME } from './config-generator';
 import { getExtendedNodePath } from '../utils/system-path';
@@ -376,6 +376,23 @@ export class OpenCodeAdapter extends EventEmitter<OpenCodeAdapterEvents> {
     if (apiKeys.xai) {
       env.XAI_API_KEY = apiKeys.xai;
       console.log('[OpenCode CLI] Using xAI API key from settings');
+    }
+
+    // Set Bedrock credentials if configured
+    const bedrockCredentials = getBedrockCredentials();
+    if (bedrockCredentials) {
+      if (bedrockCredentials.authType === 'accessKeys') {
+        env.AWS_ACCESS_KEY_ID = bedrockCredentials.accessKeyId;
+        env.AWS_SECRET_ACCESS_KEY = bedrockCredentials.secretAccessKey;
+        console.log('[OpenCode CLI] Using Bedrock Access Key credentials');
+      } else if (bedrockCredentials.authType === 'profile') {
+        env.AWS_PROFILE = bedrockCredentials.profileName;
+        console.log('[OpenCode CLI] Using Bedrock AWS Profile:', bedrockCredentials.profileName);
+      }
+      if (bedrockCredentials.region) {
+        env.AWS_REGION = bedrockCredentials.region;
+        console.log('[OpenCode CLI] Using Bedrock region:', bedrockCredentials.region);
+      }
     }
 
     // Set Ollama host if configured
